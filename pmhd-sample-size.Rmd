@@ -1,0 +1,715 @@
+---
+title: "Sample Size Calculation"
+author: "Görkem Uyanık"
+date: "2024-04-06"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(powerMediation)
+library(skewsamp)
+library(DunnettTests)
+library(lme4)
+library(performance)
+library(binMto)
+```
+
+
+```{r}
+pilot <- read.csv("G17.pilot.data.csv")
+head(pilot)
+```
+
+
+```{r}
+pilot.mean <- mean(pilot$tot.vase.days)
+pilot.var <- var(pilot$tot.vase.days)
+between.var <- 1    # effect size = 1
+pilot.mean
+pilot.var
+
+check_overdispersion(glm(tot.vase.days ~ 1, data = pilot, family = "poisson"))
+```
+
+
+```{r}
+pilot.mean.log <- mean(log(pilot$tot.vase.days))
+pilot.var.log <- var(log(pilot$tot.vase.days))
+between.var.log <- log(exp(pilot.mean.log) + 1) - pilot.mean.log
+
+pilot.mean.log
+pilot.var.log
+between.var.log
+```
+
+
+```{r}
+# original pilot data
+power.t.test(
+  n = ,
+  delta = 1,
+  sig.level = 0.05,
+  sd = sqrt(pilot.var),
+  power = 0.8,
+  type = "two.sample",
+  alternative = "one.sided"
+)
+
+# log-transformed pilot data
+power.t.test(
+  n = ,
+  delta = between.var.log,
+  sig.level = 0.05,
+  sd = sqrt(pilot.var.log),
+  power = 0.8,
+  type = "two.sample",
+  alternative = "one.sided"
+)
+```
+
+
+```{r}
+# Power Calculations for Balanced One-Way Analysis of Variance Tests
+
+power.anova.test(
+  groups = 15,
+  between.var = between.var,
+  within.var = pilot.var,
+  power = 0.8,
+  sig.level = 0.05,
+  n = NULL
+)
+```
+
+
+```{r}
+# Estimation of required sample size as given by Cundill & Alexander (2015).
+
+# original
+n_poisson(
+  mean0 = pilot.mean,
+  effect = 1 - (pilot.mean + 1) / pilot.mean,
+  alpha = 0.025,
+  power = 0.8,
+  q = 0.5,
+  link = "identity",
+  two_sided = FALSE
+)
+
+# log-transformed
+n_poisson(
+  mean0 = pilot.mean,
+  effect = 1 - (pilot.mean + 1) / pilot.mean,
+  alpha = 0.025,
+  power = 0.8,
+  q = 0.5,
+  link = "log",
+  two_sided = FALSE
+)
+```
+
+
+```{r}
+# Many-to-one: calculate the least sample size required to achieve a certain power
+
+nvDT(
+  1,
+  0.8,
+  r = 1,
+  k = 14,
+  mu = log(exp(pilot.mean.log) + 1),
+  mu0 = pilot.mean.log,
+  contrast = "means",
+  sigma = pilot.var.log,
+  dist = "zdist",
+  alpha = 0.05,
+  testcall = "SD"
+)
+```
+
+
+```{r}
+# Sample size iteration for many-to-one comparisons of binomials
+
+H0.prob <- ppois(q = pilot.mean,
+                 lambda = pilot.mean)
+                 # lower.tail = FALSE)
+H1.prob <- ppois(q = pilot.mean,
+                 lambda = pilot.mean,
+                 lower.tail = FALSE)
+cat(H0.prob, H1.prob, "\n\n")
+
+nbinMto(
+  Ntotal = c(0, 5000),
+  pH1 = c(H0.prob, rep(H1.prob, 14)),
+  ratio = 1,
+  alpha = 0.05,
+  power = 0.8,
+  alternative = "less",
+  method = "Wald",
+  trace = FALSE
+)
+```
+
+
+```{r}
+Poisson_sims_ext0 <-
+  function(n_grid,
+           lambda0,
+           lambda1,
+           alpha,
+           n_clusters,
+           test = "two_sided",
+           n_sims = 10000,
+           seed_nr = 1234) {
+    power_vec <- matrix(nrow = 1, ncol = length(n_grid))
+    for (j in 1:length(n_grid)) {
+      # 1. Choose sample size per group
+      N <- n_grid[j]
+      # 2. Select parameters
+      lambda.control = lambda0
+      lambda.treated = lambda1
+      alpha = alpha
+      # 3. Simulate huge number of experiments and test
+      numberSimulation <- n_sims
+      pval <- numeric(numberSimulation)
+      zval <- numeric(numberSimulation)
+      set.seed(seed_nr)
+      for (i in 1:numberSimulation) {
+        # Rater-specific random effects (n_clusters)
+        # b <- rep(rnorm(n_clusters, mean = 0, sd = sqrt(sigma2_b)), each = N / n_clusters)
+        # We simulate from Poisson distribution taking into account random effects b
+        # (N per group)
+        # controlGroup <- rpois(N, lambda = lambda.control * exp(b))
+        # treatedGroup <- rpois(N, lambda = lambda.treated * exp(b))
+        controlGroup <- rpois(N, lambda = lambda.control)
+        treatedGroup <- rpois(N, lambda = lambda.treated)
+        cluster_id <- rep(1:n_clusters, each = N / n_clusters)
+        simData <- data.frame(
+          response = c(controlGroup, treatedGroup),
+          treatment = rep(c(0, 1), each = N),
+          cluster_id = rep(cluster_id, 2)
+        )
+        # We use a GLMM model for Poisson regression to test effect of treatment
+        # (Wald test)
+        glm_fit <- summary(glm(
+          response ~ treatment,
+          data = simData,
+          family = poisson()
+        ))
+        pval[i] <- glm_fit$coeff["treatment", "Pr(>|z|)"]
+        zval[i] <- glm_fit$coeff["treatment", "z value"]
+        if (test == "greater" & zval[i] > 0) {
+          pval[i] <- pval[i] / 2
+        }
+        if (test == "greater" & zval[i] < 0) {
+          pval[i] <- 1 - (pval[i] / 2)
+        }
+        if (test == "less" & zval[i] < 0) {
+          pval[i] <- pval[i] / 2
+        }
+        if (test == "less" & zval[i] > 0) {
+          pval[i] <- 1 - (pval[i] / 2)
+        }
+      }
+      # 4. Estimate power
+      power_vec[j] = sum(pval < alpha) / numberSimulation
+    }
+    return(list(n_grid = n_grid, power_vec = power_vec))
+  }
+```
+
+```{r}
+# plot sample size vs. power for different variances of random effects
+
+n_clusters <- 10
+
+powers1 <- c()
+n_points <- n_clusters * 1:20
+for (i in n_points) {
+  powers1 <- c(
+    powers1,
+    Poisson_sims_ext0(
+      n_grid = i,
+      lambda0 = pilot.mean,
+      lambda1 = pilot.mean + 1,
+      alpha = 0.05,
+      n_clusters = n_clusters,
+      test = "greater",
+      n_sims = 100,
+      seed_nr = 1234
+    )$power_vec
+  )
+}
+
+plot(x = n_points, y = powers1, ylim = c(0, 1), type = "line", xlab = "n per group", ylab = "power", col="red")
+abline(h = 0.8, lty = "dashed")
+abline(h = 0.9, lty = "dashed")
+```
+
+
+```{r}
+Poisson_sims_ext1 <-
+  function(n_grid,
+           lambda0,
+           lambda1,
+           alpha,
+           n_clusters,
+           sigma2_b,
+           test = "two_sided",
+           n_sims = 10000,
+           seed_nr = 1234) {
+    power_vec <- matrix(nrow = 1, ncol = length(n_grid))
+    for (j in 1:length(n_grid)) {
+      # 1. Choose sample size per group
+      N <- n_grid[j]
+      # 2. Select parameters
+      lambda.control = lambda0
+      lambda.treated = lambda1
+      alpha = alpha
+      # 3. Simulate huge number of experiments and test
+      numberSimulation <- n_sims
+      pval <- numeric(numberSimulation)
+      zval <- numeric(numberSimulation)
+      set.seed(seed_nr)
+      for (i in 1:numberSimulation) {
+        # Rater-specific random effects (n_clusters)
+        b <- rep(rnorm(n_clusters, mean = 0, sd = sqrt(sigma2_b)), each = N / n_clusters)
+        cluster_id <- rep(1:n_clusters, each = N / n_clusters)
+        # We simulate from Poisson distribution taking into account random effects b
+        # (N per group)
+        controlGroup <- rpois(N, lambda = lambda.control * exp(b))
+        treatedGroup <- rpois(N, lambda = lambda.treated * exp(b))
+        simData <- data.frame(
+          response = c(controlGroup, treatedGroup),
+          treatment = rep(c(0, 1), each = N),
+          cluster_id = rep(cluster_id, 2)
+        )
+        # We use a GLMM model for Poisson regression to test effect of treatment
+        # (Wald test)
+        glmer_fit <- summary(glmer(
+          response ~ treatment + (1 | cluster_id),
+          data = simData,
+          family = poisson()
+        ))
+        pval[i] <- glmer_fit$coeff["treatment", "Pr(>|z|)"]
+        zval[i] <- glmer_fit$coeff["treatment", "z value"]
+        if (test == "greater" & zval[i] > 0) {
+          pval[i] <- pval[i] / 2
+        }
+        if (test == "greater" & zval[i] < 0) {
+          pval[i] <- 1 - (pval[i] / 2)
+        }
+        if (test == "less" & zval[i] < 0) {
+          pval[i] <- pval[i] / 2
+        }
+        if (test == "less" & zval[i] > 0) {
+          pval[i] <- 1 - (pval[i] / 2)
+        }
+      }
+      # 4. Estimate power
+      power_vec[j] = sum(pval < alpha) / numberSimulation
+    }
+    return(list(n_grid = n_grid, power_vec = power_vec))
+  }
+```
+
+
+```{r}
+# plot sample size vs. power for different variances of random effects
+
+n_clusters <- 10
+
+for (sigma2_b in c(0.5, 1, 1.5, 2)) {
+  powers1 <- c()
+  n_points <- n_clusters * 1:20
+  for (i in n_points) {
+    powers1 <- c(
+      powers1,
+      Poisson_sims_ext1(
+        n_grid = i,
+        lambda0 = pilot.mean,
+        lambda1 = pilot.mean + 1,
+        alpha = 0.05,
+        n_clusters = n_clusters,
+        sigma2_b = sigma2_b, 
+        test = "greater",
+        n_sims = 100,
+        seed_nr = 1234
+      )$power_vec
+    )
+  }
+  
+  # powers2 <- c()
+  # n_points <- n_clusters * 1:20
+  # for (i in n_points) {
+  #   powers2 <- c(
+  #     powers2,
+  #     Poisson_sims_ext1(
+  #       n_grid = i,
+  #       lambda0 = pilot.mean,
+  #       lambda1 = pilot.mean + 2,
+  #       alpha = 0.05,
+  #       n_clusters = n_clusters,
+  #       sigma2_b = sigma2_b,
+  #       test = "greater",
+  #       n_sims = 100,
+  #       seed_nr = 1234
+  #     )$power_vec
+  #   )
+  # }
+  
+  plot(x = n_points, y = powers1, ylim = c(0, 1), type = "line", xlab = "n per group", ylab = "power", col="red")
+  # lines(x = n_points, y = powers2, col="blue")
+  abline(h = 0.8, lty = "dashed")
+  abline(h = 0.9, lty = "dashed")
+}
+```
+
+
+```{r}
+Poisson_sims_ext2 <-
+  function(n_grid,
+           lambda0,
+           lambda1,
+           ngroups,
+           alpha,
+           test = "two_sided",
+           n_sims = 10000,
+           seed_nr = 1234,
+           method = "Holm") {
+    power_vec <- matrix(nrow = 1, ncol = length(n_grid))
+    for (j in 1:length(n_grid)) {
+      # 1. Choose sample size per group
+      N <- n_grid[j]
+      # 2. Select parameters
+      lambda.control = lambda0
+      for (group_id in 1:ngroups) {
+        lambda.group = paste0("lambda.treated", group_id)
+        assign(lambda.group, lambda1)
+      }
+      alpha = alpha
+      # 3. Simulate huge number of experiments and perform tests
+      numberSimulation <- n_sims
+      pval <- matrix(0, nrow = numberSimulation, ncol = ngroups)
+      zval <- matrix(0, nrow = numberSimulation, ncol = ngroups)
+      set.seed(seed_nr)
+      for (i in 1:numberSimulation) {
+        # We simulate from Poisson distribution
+        controlGroup <- rpois(N, lambda = lambda.control)
+        treatedGroup <- vector()
+        for (group_id in 1:ngroups) {
+          lambda.group = paste0("lambda.treated", group_id)
+          treatedGroup = c(treatedGroup, rpois(N, lambda = get(lambda.group)))
+        }
+        simData <- data.frame(
+          response = c(controlGroup, treatedGroup),
+          treatment = rep(c(0, 1:ngroups), each = N)
+        )
+        # We use a GLMM model for Poisson regression to test effect of treatment
+        # (Wald test)
+        glm_fit <-
+          summary(glm(
+            response ~ as.factor(treatment),
+            data = simData,
+            family = poisson()
+          ))
+        pval[i, ] <- glm_fit$coeff[-1, "Pr(>|z|)"]
+        zval[i, ] <- glm_fit$coeff[-1, "z value"]
+        for (k in 1:ngroups) {
+          if (test == "greater" & zval[i, k] > 0) {
+            pval[i, k] <- pval[i, k] / 2
+          }
+          if (test == "greater" & zval[i, k] < 0) {
+            pval[i, k] <- 1 - (pval[i, k] / 2)
+          }
+          if (test == "less" & zval[i, k] < 0) {
+            pval[i, k] <- pval[i, k] / 2
+          }
+          if (test == "less" & zval[i, k] > 0) {
+            pval[i, k] <- 1 - (pval[i, k] / 2)
+          }
+        }
+        # Multiplicity adjustment(s)
+        if (method == "Bonferroni") {
+          pval[i, ] = p.adjust(pval[i, ], method = "bonferroni")
+        }
+        if (method == "Holm") {
+          pval[i, ] = p.adjust(pval[i, ], method = "holm")
+        }
+        if (method == "Benjamini-Hochberg") {
+          pval[i, ] = p.adjust(pval[i, ], method = "BH")
+        }
+      }
+      # 4. Estimate power
+      power_vec[j] = mean(apply(
+        pval,
+        2,
+        FUN = function(x) {
+          sum(x < alpha)
+        }
+      )) / numberSimulation
+    }
+    return(list(n_grid = n_grid, power_vec = power_vec))
+  }
+```
+
+
+
+```{r}
+n_clusters <- 10
+
+powers1 <- c()
+n_points <- n_clusters * 1:20
+for (i in n_points) {
+  powers1 <- c(
+    powers1,
+    Poisson_sims_ext2(
+      n_grid = i,
+      lambda0 = pilot.mean,
+      lambda1 = pilot.mean + 1,
+      ngroups = 14,
+      alpha = 0.05,
+      test = "greater",
+      n_sims = 100,
+      seed_nr = 1234,
+      method = "Bonferroni"
+    )$power_vec
+  )
+}
+
+powers2 <- c()
+n_points <- n_clusters * 1:20
+for (i in n_points) {
+  powers2 <- c(
+    powers2,
+    Poisson_sims_ext2(
+      n_grid = i,
+      lambda0 = pilot.mean,
+      lambda1 = pilot.mean + 1,
+      ngroups = 14,
+      alpha = 0.05,
+      test = "greater",
+      n_sims = 100,
+      seed_nr = 1234,
+      method = "Holm"
+    )$power_vec
+  )
+}
+
+powers3 <- c()
+n_points <- n_clusters * 1:20
+for (i in n_points) {
+  powers3 <- c(
+    powers3,
+    Poisson_sims_ext2(
+      n_grid = i,
+      lambda0 = pilot.mean,
+      lambda1 = pilot.mean + 1,
+      ngroups = 14,
+      alpha = 0.05,
+      test = "greater",
+      n_sims = 100,
+      seed_nr = 1234,
+      method = "Benjamini-Hochberg"
+    )$power_vec
+  )
+}
+
+plot(x = n_points, y = powers1, ylim = c(0, 1), type = "line", xlab = "n per group", ylab = "power", col="red")
+lines(x = n_points, y = powers2, col="blue")
+lines(x = n_points, y = powers3, col="black")
+abline(h = 0.8, lty = "dashed")
+abline(h = 0.9, lty = "dashed")
+```
+
+
+
+
+```{r}
+Poisson_sims_ext3 <-
+  function(n_grid,
+           lambda0,
+           lambda1,
+           ngroups,
+           alpha,
+           n_clusters,
+           sigma2_b,
+           test = "two_sided",
+           n_sims = 100,
+           seed_nr = 1234,
+           method = "Holm") {
+    power_vec <- matrix(nrow = 1, ncol = length(n_grid))
+    for (j in 1:length(n_grid)) {
+      # 1. Choose sample size per group
+      N <- n_grid[j]
+      # 2. Select parameters
+      lambda.control = lambda0
+      for (group_id in 1:ngroups) {
+        lambda.group = paste0("as.factor(treatment)", group_id)
+        assign(lambda.group, lambda1)
+      }
+      alpha = alpha
+      # 3. Simulate huge number of experiments and perform tests
+      numberSimulation <- n_sims
+      pval <- matrix(0, nrow = numberSimulation, ncol = ngroups)
+      zval <- matrix(0, nrow = numberSimulation, ncol = ngroups)
+      set.seed(seed_nr)
+      for (i in 1:numberSimulation) {
+        b <- rep(rnorm(n_clusters, mean = 0, sd = sqrt(sigma2_b)), each = N / n_clusters)
+        cluster_id <- rep(1:n_clusters, each = N / n_clusters)
+        # We simulate from Poisson distribution taking into account random effects b
+        # (N per group)
+        controlGroup <- rpois(N, lambda = lambda.control * exp(b))
+        treatedGroup <- vector()
+        for (group_id in 1:ngroups) {
+          lambda.group = paste0("as.factor(treatment)", group_id)
+          treatedGroup = c(treatedGroup, rpois(N, lambda = get(lambda.group) * exp(b)))
+        }
+        simData <- data.frame(
+          response = c(controlGroup, treatedGroup),
+          treatment = rep(c(0, 1:ngroups), each = N),
+          cluster_id = rep(cluster_id, ngroups + 1)
+        )
+        # We use a GLMM model for Poisson regression to test effect of treatment
+        # (Wald test)
+        glmer_fit <-
+          summary(glmer(
+            response ~ as.factor(treatment) + (1 | cluster_id),
+            data = simData,
+            family = poisson()
+          ))
+        #print(glmer_fit$coeff)
+        pval[i] <- glmer_fit$coeff[lambda.group, "Pr(>|z|)"]
+        zval[i] <- glmer_fit$coeff[lambda.group, "z value"]
+        for (k in 1:ngroups) {
+          if (test == "greater" & zval[i, k] > 0) {
+            pval[i, k] <- pval[i, k] / 2
+          }
+          if (test == "greater" & zval[i, k] < 0) {
+            pval[i, k] <- 1 - (pval[i, k] / 2)
+          }
+          if (test == "less" & zval[i, k] < 0) {
+            pval[i, k] <- pval[i, k] / 2
+          }
+          if (test == "less" & zval[i, k] > 0) {
+            pval[i, k] <- 1 - (pval[i, k] / 2)
+          }
+        }
+        # Multiplicity adjustment(s)
+        if (method == "Bonferroni") {
+          pval[i, ] = p.adjust(pval[i, ], method = "bonferroni")
+        }
+        if (method == "Holm") {
+          pval[i, ] = p.adjust(pval[i, ], method = "holm")
+        }
+        if (method == "Benjamini-Hochberg") {
+          pval[i, ] = p.adjust(pval[i, ], method = "BH")
+        }
+      }
+      print(n_grid)
+      # 4. Estimate power
+      power_vec[j] = mean(apply(
+        pval,
+        2,
+        FUN = function(x) {
+          sum(x < alpha)
+        }
+      )) / numberSimulation
+    }
+    return(list(n_grid = n_grid, power_vec = power_vec))
+  }
+```
+
+
+
+```{r}
+n_clusters <- 10
+sigma2_b <- 0.5
+
+powers1 <- c()
+n_points <- n_clusters * 1:10
+for (i in n_points) {
+  powers1 <- c(
+    powers1,
+    Poisson_sims_ext3(
+      n_grid = i,
+      lambda0 = pilot.mean,
+      lambda1 = pilot.mean + 1,
+      ngroups = 14,
+      alpha = 0.05,
+      n_clusters = n_clusters,
+      sigma2_b = sigma2_b,
+      test = "greater",
+      n_sims = 100,
+      seed_nr = 1234,
+      method = "Bonferroni"
+    )$power_vec
+  )
+}
+
+powers2 <- c()
+n_points <- n_clusters * 1:10
+for (i in n_points) {
+  powers2 <- c(
+    powers2,
+    Poisson_sims_ext3(
+      n_grid = i,
+      lambda0 = pilot.mean,
+      lambda1 = pilot.mean + 1,
+      ngroups = 14,
+      alpha = 0.05,
+      n_clusters = n_clusters,
+      sigma2_b = sigma2_b,
+      test = "greater",
+      n_sims = 100,
+      seed_nr = 1234,
+      method = "Holm"
+    )$power_vec
+  )
+}
+
+powers3 <- c()
+n_points <- n_clusters * 1:10
+for (i in n_points) {
+  powers3 <- c(
+    powers3,
+    Poisson_sims_ext3(
+      n_grid = i,
+      lambda0 = pilot.mean,
+      lambda1 = pilot.mean + 1,
+      ngroups = 14,
+      alpha = 0.05,
+      n_clusters = n_clusters,
+      sigma2_b = sigma2_b,
+      test = "greater",
+      n_sims = 100,
+      seed_nr = 1234,
+      method = "Benjamini-Hochberg"
+    )$power_vec
+  )
+}
+
+plot(x = n_points, y = powers1, ylim = c(0, 1), type = "line", xlab = "n per group", ylab = "power", col="red")
+lines(x = n_points, y = powers2, col="blue")
+lines(x = n_points, y = powers3, col="black")
+abline(h = 0.8, lty = "dashed")
+abline(h = 0.9, lty = "dashed")
+```
+
+
+
+
+
+
+
+
+
