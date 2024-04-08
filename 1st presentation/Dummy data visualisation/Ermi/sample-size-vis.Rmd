@@ -1,0 +1,80 @@
+---
+title: "sample-size-vis"
+author: "Ermioni Athanasiadi"
+date: "2024-04-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+dat <- read.csv("DummyData.csv", header = T, sep = ";", check.names = F, quote = "")
+names(dat) <- c("flowerID", "garden", "species", "compound", "tot.vase.days")
+head(dat)
+```
+
+
+
+```{r}
+dat$compound <- as.factor(dat$compound)
+dat$garden <- as.factor(dat$species)
+dat$species <- as.factor(dat$species)
+
+
+```
+
+```{r}
+plot(dat$tot.vase.days ~ dat$species)
+
+ggplot(dat, 
+       aes(x=compound, y= tot.vase.days)) +
+  geom_boxplot(color = "blue") + 
+  theme(axis.title=element_text(size=15), axis.text = element_text(size=15))
+
+ggplot(dat, 
+       aes(x=garden, y= tot.vase.days)) +
+  geom_boxplot(color = "blue") + 
+  theme(axis.title=element_text(size=15), axis.text = element_text(size=15))
+
+ggplot(dat, 
+       aes(x=compound, y= tot.vase.days)) +
+  geom_col(aes(color = garden)) + 
+  theme(axis.title=element_text(size=15), axis.text = element_text(size=15))
+
+ggplot(dat) +
+  geom_col(aes(x = compound, y = tot.vase.days, fill = species)) + 
+  theme(axis.title=element_text(size=15), axis.text = element_text(size=15))
+```
+
+```{r}
+
+box_tot <- ggplot(dat) +
+  geom_boxplot(aes(x = compound, y = tot.vase.days)) + 
+  theme(axis.title=element_text(size=15), axis.text = element_text(size=15)) +
+  xlab("Compound Type") + ylab("Days of Freshness") +
+  scale_y_continuous(limits = c(0, 30), breaks = seq(0, 30, by = 5))
+
+box_garden <- ggplot(dat) +
+  geom_boxplot(aes(x = compound, y = tot.vase.days, fill = garden)) + 
+  theme(axis.title=element_text(size=15), axis.text = element_text(size=15)) +
+  xlab("Compound Type") + ylab("Days of Freshness") +
+  scale_y_continuous(limits = c(0, 30), breaks = seq(0, 30, by = 5))
+
+box_species <- ggplot(dat) +
+  geom_boxplot(aes(x = compound, y = tot.vase.days, fill = species)) + 
+  theme(axis.title=element_text(size=15), axis.text = element_text(size=15)) +
+  xlab("Compound Type") + ylab("Days of Freshness") + 
+  scale_y_continuous(limits = c(0, 30), breaks = seq(0, 30, by = 5))
+
+```
+
+```{r}
+ggsave("box_tot.jpeg", box_tot, width = 17, height = 10, dpi = 200, unit = "cm")
+ggsave("box_garden.jpeg", box_garden, width = 17, height = 10, dpi = 200, unit = "cm")
+ggsave("box_species.jpeg", box_species, width = 17, height = 10, dpi = 200, unit = "cm")
+
+
+```
+
