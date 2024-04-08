@@ -1,4 +1,4 @@
-
+# Test comment Ermi
 # load libraries
 library(tidyverse)
 library(table1)
@@ -45,7 +45,7 @@ Box_plot_total <- DummyData %>%
   scale_alpha_manual(values = c(0.8, 0.1)) +
   theme_minimal() +
   xlab("Compound") + 
-  scale_y_continuous(limits = c(0, 30), breaks = seq(0, 30, by = 5), expand = c(0,0)) +
+  scale_y_continuous(limits = c(3, 30), breaks = seq(3, 30, by = 5), expand = c(0,0)) +
   ylab("Total vase days") +
   theme(plot.title = element_text(hjust = 0.5, size = 8, face = "bold"),
         axis.title = element_text(size = 7),
@@ -94,7 +94,7 @@ Box_plot_by_garden <- DummyData %>%
   labs(fill = "Garden")
 
 # Save the plots
-ggsave("Box_plot_total.jpeg", Box_plot_total, width = 9, height = 5.06, dpi = 300, unit = "cm")
+ggsave("Box_plot_total.jpeg", Box_plot_total, width = 18, height = 10, dpi = 300, unit = "cm")
 ggsave("Box_plot_by_species.jpeg", Box_plot_by_species, width = 18, height = 10.13, dpi = 300, unit = "cm")
 ggsave("Box_plot_by_garden.jpeg", Box_plot_by_garden, width = 18, height = 10.13, dpi = 300, unit = "cm")
 
